@@ -1,0 +1,51 @@
+import { defineConfig } from 'orval'
+
+export default defineConfig({
+  calliope: {
+    input: {
+      target: '../backend/open-api.json',
+    },
+
+    output: {
+      client: 'vue-query',
+      httpClient: 'fetch',
+
+      mode: 'tags-split',
+
+      target: 'src/api/calliope.ts',
+      schemas: 'src/api/models',
+
+      override: {
+        // The list endpoints use the HTTP QUERY method, and Orval classifies anything that
+        // is not GET as a mutation — which would mean no caching, no query key and no fetch
+        // on mount. They are reads, so they are generated as queries.
+        operations: {
+          listGroups: { query: { useQuery: true } },
+          listPosts: { query: { useQuery: true } },
+          listUsers: { query: { useQuery: true } },
+          listNotifications: { query: { useQuery: true } },
+          search: { query: { useQuery: true } },
+          listChats: { query: { useQuery: true } },
+          listMessages: { query: { useQuery: true } },
+          listChatMemberships: { query: { useQuery: true } },
+          listStoryIdeas: { query: { useQuery: true } },
+          getStoryIdeaCarousel: { query: { useQuery: true } },
+          listBlocks: { query: { useQuery: true } },
+          listReports: { query: { useQuery: true } },
+          listIpOverview: { query: { useQuery: true } },
+          listSharedIpAddresses: { query: { useQuery: true } },
+          listForumThreads: { query: { useQuery: true } },
+          listForumPosts: { query: { useQuery: true } },
+          listBlindDateParticipation: { query: { useQuery: true } },
+        },
+        // The generated client resolves for every status, so vue-query would see a 401 as a
+        // success. The mutator throws instead. It lives outside src/api because that whole
+        // directory is generated and git-ignored.
+        mutator: {
+          path: 'src/lib/api/apiFetch.ts',
+          name: 'apiFetch',
+        },
+      },
+    },
+  },
+})

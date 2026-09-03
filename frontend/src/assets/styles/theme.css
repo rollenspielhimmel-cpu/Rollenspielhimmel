@@ -1,0 +1,150 @@
+/* ─────────────────────────────────────────────────────────────
+   Calliope design system → shadcn-vue theme
+   Source of truth: Calliope Design System (tokens/colors.css,
+   tokens/typography.css, tokens/borders.css).
+   One warm paper family, one ink family, one accent (burnt oak).
+   Colour never encodes status, ranking or achievement.
+   ───────────────────────────────────────────────────────────── */
+
+/* What `dark:` keys off. The values themselves are in colors.css. */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  /* Dialog widths, by what the dialog is for rather than by which dialog it is. Named here so
+     the number lives in one place: `sm:max-w-[440px]` copied into ten files is how every form
+     ended up the width of a confirmation. Below `sm` none of them apply — the dialog is
+     `calc(100% - 2rem)` there, and these are all wider than a phone. */
+  --container-dialog-confirm: 440px;
+  --container-dialog-form: 560px;
+  --container-dialog-wide: 760px;
+  --container-dialog-workspace: 960px;
+
+  /* The desktop frame, from tokens/spacing.css. In the same namespace as the dialogs above
+     because that is the one Tailwind draws `w-` and `max-w-` from, whatever the box is for.
+     The reading column is centred between the two rail widths rather than inside whatever
+     `main` happens to be, so `.reading-column` in base.css needs the rails' numbers too. */
+  --container-rail-left: 262px;
+  --container-rail-right: 262px;
+  --container-rail-collapsed: 34px;
+  --container-reading: 684px;
+
+  /* The type scale, named for the job rather than the number — the same reason the widths
+     above are named. `text-body` sets the size *and* the line height, so the pair cannot drift
+     apart: before this there were 149 places writing `text-[13.5px] leading-[1.7]` by hand, and
+     13.5px had picked up four different line heights for two different jobs.
+
+     The names come from tokens/typography.css where the product uses what that file describes.
+     `body` and `note` are additions: that file was written for the mockups, which had no
+     small-prose style, and the product grew one. */
+  --text-h1: 25px;
+  --text-h1--line-height: 1.2;
+  --text-h2: 20px;
+  --text-h2--line-height: 1.3;
+
+  /* Page prose. Paired with --ink-4 almost everywhere it appears. */
+  --text-body: 13.5px;
+  --text-body--line-height: 1.7;
+  /* The quieter second voice: hints under a field, empty states, explanatory lines. --ink-5. */
+  --text-note: 13.5px;
+  --text-note--line-height: 1.6;
+  /* Single-line interface text — the bars, the tabs, the filter strips. */
+  --text-nav: 13.5px;
+  --text-nav--line-height: 1.2;
+
+  /* A row in a list. */
+  --text-row: 13px;
+  --text-row--line-height: 1.6;
+  /* Controls and panel bodies. */
+  --text-control: 12.5px;
+  --text-control--line-height: 1.5;
+  /* Rail rows, which are looser than a control because they wrap. */
+  --text-rail: 12.5px;
+  --text-rail--line-height: 1.95;
+
+  /* The page gutter on a phone, paired with `md:px-10` everywhere it appears. Not on the 2px
+     scale and not drift either: one value, written out at twenty-five sites, that nothing named.
+     Every other spacing value comes from Tailwind's own scale, which already covers the design
+     system's — 6px is `1.5`, 14px is `3.5`, and so on. */
+  --spacing-gutter: 18px;
+
+  --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, Menlo, monospace;
+  /* Headings and everything members write are Newsreader, not the UI sans. */
+  --font-heading: var(--font-serif);
+
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+
+  /* The one card elevation, as `shadow-card`. One token rather than a pair of literals repeated
+     per component, so the whole product can be re-tuned — or taken back out — in one place.
+     The value itself is per theme, in colors.css. */
+  --shadow-card: var(--elevation-card);
+
+  /* The alert surface, as `bg-surface-alert` / `border-line-alert`. Operators' tools only. */
+  --color-surface-alert: var(--surface-alert);
+  --color-line-alert: var(--line-alert);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-avatar-foreground: var(--avatar-foreground);
+  --color-avatar: var(--avatar);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+
+  /* Calliope radii are deliberately sparse: nothing in the reading surface is
+     rounded, only controls are. --radius is the control radius (6px). */
+  --radius-sm: 3px; /* tags */
+  --radius-md: 4px; /* --radius-xs */
+  --radius-lg: var(--radius); /* 6px, controls */
+  --radius-xl: 8px;
+
+  /* Raw Calliope palette, available as utilities (bg-paper-1, text-ink-2, …).
+     `var()`, not literals: `@theme inline` inlines the reference into each utility, which is
+     what lets colors.css's `.dark` block reach all of them at once. */
+  --color-paper-0: var(--paper-0);
+  --color-paper-1: var(--paper-1);
+  --color-paper-2: var(--paper-2);
+  --color-paper-3: var(--paper-3);
+  --color-paper-4: var(--paper-4);
+  --color-line-1: var(--line-1);
+  --color-line-2: var(--line-2);
+  --color-line-3: var(--line-3);
+  --color-line-4: var(--line-4);
+  --color-line-5: var(--line-5);
+  --color-ink-1: var(--ink-1);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-ink-4: var(--ink-4);
+  --color-ink-5: var(--ink-5);
+  --color-ink-6: var(--ink-6);
+  --color-paper-edge: var(--paper-edge);
+  --color-ink-label: var(--ink-label);
+  --color-oak: var(--oak);
+  --color-oak-deep: var(--oak-deep);
+  --color-oak-deeper: var(--oak-deeper);
+}

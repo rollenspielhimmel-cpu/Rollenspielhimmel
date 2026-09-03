@@ -1,0 +1,513 @@
+import { PseudonymService } from "@/src/service/pseudonym_service.ts";
+import type { Selectable } from "kysely";
+import { db } from "@/src/database/client.ts";
+import { NotificationService } from "@/src/service/notification_service.ts";
+import type {
+  UserInWritingGroupRole,
+  UserInWritingGroupStatus,
+  WritingGroup as DatabaseWritingGroup,
+  WritingGroupVisibility,
+} from "@/src/database/schema.ts";
+import { emptyToNull } from "@/src/util/optional_text.ts";
+import { refuseOrphanedSubgenres } from "@/src/http/story_metadata_refusal.ts";
+import type { User } from "./user_service.ts";
+import {
+  type ListQuery,
+  type ListResults,
+  listResultsWithCount,
+  searchPattern,
+} from "@/src/list/list_endpoint_query.ts";
+import type { StoryVocabularyFilter } from "@/src/query/story_vocabulary.ts";
+import { withStoryVocabulary } from "@/src/query/story_vocabulary.ts";
+import {
+  type FavouriteFilter,
+  FAVOURITES_FIRST,
+  withFavourite,
+} from "@/src/query/favourite.ts";
+
+export type WritingGroup =
+  & Pick<
+    Selectable<DatabaseWritingGroup>,
+    | "id"
+    | "title"
+    | "subtitle"
+    | "synopsis"
+    | "visibility"
+    | "storyStatus"
+    | "genres"
+    | "subgenres"
+    | "tropes"
+    | "contentWarnings"
+    | "storyThemes"
+    | "storySettings"
+    | "tense"
+    | "perspective"
+    | "language"
+    | "createdBy"
+    | "createdAt"
+    | "lastActivityAt"
+    | "authorsArePseudonymous"
+  >
+  // Null once the author has deleted their account, because created_by is ON DELETE SET NULL.
+  & { createdByUsername: string | null }
+  // The reader's own standing, null for a public group they are not part of.
+  & {
+    status: UserInWritingGroupStatus | null;
+    role: UserInWritingGroupRole | null;
+    /** Null unless the reader was invited to this group; the invitations list dates rows by it. */
+    invitedAt: string | null;
+    /** The reader's own favourite, visible to nobody else. */
+    isFavourite: boolean;
+  };
+
+/**
+ * Which groups a list is asking for, relative to the reader.
+ *
+ * `joined` is the default because "Meine Gruppen" means the ones somebody belongs to. The
+ * older behaviour — every public group plus your own — is `any`, which is right for a search
+ * across everything and wrong for a list called mine.
+ */
+export type MembershipFilter = "joined" | "invited" | "none" | "any";
+
+const SELECTED_COLUMNS = [
+  "writingGroup.id",
+  "writingGroup.title",
+  "writingGroup.subtitle",
+  "writingGroup.synopsis",
+  "writingGroup.visibility",
+  "writingGroup.storyStatus",
+  "writingGroup.genres",
+  "writingGroup.subgenres",
+  "writingGroup.tropes",
+  "writingGroup.contentWarnings",
+  "writingGroup.storyThemes",
+  "writingGroup.storySettings",
+  "writingGroup.tense",
+  "writingGroup.perspective",
+  "writingGroup.language",
+  "writingGroup.createdBy",
+  "writingGroup.createdAt",
+  "writingGroup.lastActivityAt",
+  // Whether this group's authors are shown under pseudonyms. Returned rather than kept back: the
+  // interface has to know whether it is drawing a Blind-Date, and the two people in one already
+  // know they are in it. It says nothing about *who* the other is, which is the part that matters.
+  "writingGroup.authorsArePseudonymous",
+] as const;
+
+/**
+ * What a member may set about the story. Every field optional except the two that were always
+ * required, so a group created before any of this existed is still describable.
+ */
+export type WritingGroupValues =
+  & Pick<Selectable<DatabaseWritingGroup>, "title" | "synopsis">
+  & Partial<
+    Pick<
+      Selectable<DatabaseWritingGroup>,
+      | "subtitle"
+      | "visibility"
+      | "storyStatus"
+      | "genres"
+      | "subgenres"
+      | "tropes"
+      | "contentWarnings"
+      | "storyThemes"
+      | "storySettings"
+      | "tense"
+      | "perspective"
+      | "language"
+    >
+  >;
+
+/** The one place values become a row: normalisation cannot be skipped by a caller. */
+function toRow(values: Partial<WritingGroupValues>) {
+  return {
+    ...(values.title === undefined ? {} : { title: values.title.trim() }),
+    ...(values.subtitle === undefined
+      ? {}
+      : { subtitle: emptyToNull(values.subtitle) }),
+    ...(values.synopsis === undefined
+      ? {}
+      : { synopsis: values.synopsis.trim() }),
+    ...(values.visibility === undefined
+      ? {}
+      : { visibility: values.visibility }),
+    ...(values.storyStatus === undefined
+      ? {}
+      : { storyStatus: values.storyStatus }),
+    ...(values.genres === undefined ? {} : { genres: values.genres }),
+    ...(values.subgenres === undefined ? {} : { subgenres: values.subgenres }),
+    ...(values.tropes === undefined ? {} : { tropes: values.tropes }),
+    ...(values.contentWarnings === undefined
+      ? {}
+      : { contentWarnings: values.contentWarnings }),
+    ...(values.storyThemes === undefined
+      ? {}
+      : { storyThemes: emptyToNull(values.storyThemes) }),
+    ...(values.storySettings === undefined
+      ? {}
+      : { storySettings: emptyToNull(values.storySettings) }),
+    ...(values.tense === undefined ? {} : { tense: values.tense ?? null }),
+    ...(values.perspective === undefined
+      ? {}
+      : { perspective: values.perspective ?? null }),
+    ...(values.language === undefined ? {} : { language: values.language }),
+  };
+}
+
+/**
+ * The group and its first membership have to be written together — a group whose creator
+ * is not an administrator could never be administered.
+ */
+async function insertWritingGroup(
+  creator: User,
+  values: WritingGroupValues,
+): Promise<WritingGroup> {
+  refuseOrphanedSubgenres(values.genres ?? [], values.subgenres ?? []);
+
+  return await db.transaction().execute(async (transaction) => {
+    const writingGroup = await transaction
+      .insertInto("writingGroup")
+      // title and synopsis restated so the type carries their presence; `toRow` describes a
+      // change, where every field may be absent.
+      .values({
+        ...toRow(values),
+        title: values.title.trim(),
+        synopsis: values.synopsis.trim(),
+        createdBy: creator.id,
+      })
+      .returning(SELECTED_COLUMNS)
+      .executeTakeFirstOrThrow();
+
+    await transaction
+      .insertInto("userInWritingGroup")
+      .values({
+        userId: creator.id,
+        writingGroupId: writingGroup.id,
+        role: "administrator",
+        // The creator is not invited to their own group.
+        status: "joined",
+      })
+      .execute();
+
+    // The membership was just written in this transaction, so it is stated rather than
+    // re-read: the founder joined their own group as its administrator.
+    return {
+      ...writingGroup,
+      createdByUsername: creator.username,
+      status: "joined",
+      role: "administrator",
+      // Nobody invited the founder, so there is no date to state.
+      invitedAt: null,
+      // Founding a group does not favourite it: that is the member's own act, and one they can
+      // take the moment this returns.
+      isFavourite: false,
+    };
+  });
+}
+
+/**
+ * A group is readable when it is public or when the user is one of its members. The
+ * membership join is left, so public groups are returned to non-members too.
+ */
+function visibleToUser(user: User) {
+  return db
+    .selectFrom("writingGroup")
+    .leftJoin(
+      "userInWritingGroup",
+      (join) =>
+        join
+          .onRef("userInWritingGroup.writingGroupId", "=", "writingGroup.id")
+          .on("userInWritingGroup.userId", "=", user.id),
+    )
+    // Left as well: an account that has been deleted leaves the group behind with no author.
+    .leftJoin("user", "user.id", "writingGroup.createdBy")
+    .where((eb) =>
+      eb.or([
+        eb("writingGroup.visibility", "=", "public"),
+        eb("userInWritingGroup.userId", "is not", null),
+      ])
+    );
+}
+
+/** The author's name is joined in rather than stored, so it follows a rename. */
+const AUTHOR_COLUMN = "user.username as createdByUsername" as const;
+
+/**
+ * Null whenever the left join found no membership, which is exactly the case the interface
+ * needs to tell apart: a public group the reader has merely come across.
+ */
+const OWN_MEMBERSHIP_COLUMNS = [
+  "userInWritingGroup.status",
+  "userInWritingGroup.role",
+  "userInWritingGroup.invitedAt",
+] as const;
+
+/**
+ * Whether the member may see the group, and their own standing in it — **not** the whole row.
+ * Sixteen of the seventeen callers use this as a gate, and a group carries a synopsis of up to
+ * eight thousand characters. `selectWritingGroupForReader` is the full read; both build on
+ * `visibleToUser`, so the rule is written once and only the projection differs.
+ */
+export type VisibleWritingGroupGate = {
+  id: string;
+  title: string;
+  visibility: WritingGroupVisibility;
+  createdBy: string | null;
+  status: UserInWritingGroupStatus | null;
+  role: UserInWritingGroupRole | null;
+};
+
+async function selectVisibleWritingGroup(
+  user: User,
+  writingGroupId: string,
+): Promise<VisibleWritingGroupGate | undefined> {
+  return await visibleToUser(user)
+    .select([
+      "writingGroup.id",
+      "writingGroup.title",
+      "writingGroup.visibility",
+      "writingGroup.createdBy",
+      "userInWritingGroup.status",
+      "userInWritingGroup.role",
+    ])
+    .where("writingGroup.id", "=", writingGroupId)
+    .executeTakeFirst();
+}
+
+/** The whole group as this reader sees it, favourite included — for the page that renders one. */
+async function selectWritingGroupForReader(
+  user: User,
+  writingGroupId: string,
+): Promise<WritingGroup | undefined> {
+  const group = await visibleToUser(user)
+    .$call((builder) =>
+      withFavourite(builder, "writing_group", "writingGroup.id", user.id)
+    )
+    .select([
+      ...SELECTED_COLUMNS,
+      AUTHOR_COLUMN,
+      ...OWN_MEMBERSHIP_COLUMNS,
+    ])
+    .where("writingGroup.id", "=", writingGroupId)
+    .executeTakeFirst();
+
+  if (group === undefined || !group.authorsArePseudonymous) {
+    return group;
+  }
+
+  // Whoever created a Blind-Date group is one of the two people in it, so their name goes the
+  // same way every other name in it does.
+  const mask = await PseudonymService.maskForGroup(group.id);
+
+  return mask === undefined
+    ? group
+    : { ...group, createdByUsername: mask(group.createdBy).username };
+}
+
+async function listVisibleWritingGroups(
+  user: User,
+  query: ListQuery & StoryVocabularyFilter & {
+    membership: MembershipFilter;
+    favourite: FavouriteFilter;
+  },
+): Promise<ListResults<WritingGroup>> {
+  const page = await visibleWritingGroupsPage(user, query);
+
+  // One resolution for the whole page: a list of twenty groups must not be twenty pairs of
+  // queries, and all but the Blind-Dates among them need none at all.
+  const masks = await PseudonymService.masksForGroups(
+    page.results.filter((group) => group.authorsArePseudonymous).map((group) =>
+      group.id
+    ),
+  );
+
+  if (masks.size === 0) {
+    return page;
+  }
+
+  return {
+    ...page,
+    results: page.results.map((group) => {
+      const mask = masks.get(group.id);
+      return mask === undefined
+        ? group
+        : { ...group, createdByUsername: mask(group.createdBy).username };
+    }),
+  };
+}
+
+function visibleWritingGroupsPage(
+  user: User,
+  query: ListQuery & StoryVocabularyFilter & {
+    membership: MembershipFilter;
+    favourite: FavouriteFilter;
+  },
+): Promise<ListResults<WritingGroup>> {
+  return listResultsWithCount(
+    visibleToUser(user)
+      .$call((builder) =>
+        withFavourite(builder, "writing_group", "writingGroup.id", user.id)
+      )
+      .$call((builder) => withStoryVocabulary(builder, "writingGroup", query))
+      .select([
+        ...SELECTED_COLUMNS,
+        AUTHOR_COLUMN,
+        ...OWN_MEMBERSHIP_COLUMNS,
+      ])
+      // Only the reader's own favourites, which narrows like every other filter here.
+      .$if(
+        query.favourite === "only",
+        (queryBuilder) => queryBuilder.where("favourite.id", "is not", null),
+      )
+      // Narrows what visibleToUser allows; it never widens it, so a private group the reader
+      // has nothing to do with stays out however this is set. One $if per value rather than
+      // one clever one: the status literals then type themselves, and "any" is simply the
+      // case that matches none of them.
+      .$if(
+        query.membership === "none",
+        // A public group the reader has no membership row for at all.
+        (queryBuilder) =>
+          queryBuilder.where("userInWritingGroup.userId", "is", null),
+      )
+      .$if(
+        query.membership === "invited",
+        (queryBuilder) =>
+          queryBuilder.where("userInWritingGroup.status", "=", "invited"),
+      )
+      .$if(
+        query.membership === "joined",
+        (queryBuilder) =>
+          queryBuilder.where("userInWritingGroup.status", "=", "joined"),
+      )
+      // Title and description both, since a group is as often remembered by what it is
+      // about as by what it is called.
+      .$if(
+        query.search !== undefined,
+        (queryBuilder) =>
+          queryBuilder.where((eb) =>
+            eb.or([
+              // deno-lint-ignore no-non-null-assertion -- the `$if` above only runs this when the term is set
+              eb("writingGroup.title", "ilike", searchPattern(query.search!)),
+              eb(
+                "writingGroup.synopsis",
+                "ilike",
+                // deno-lint-ignore no-non-null-assertion -- the `$if` above only runs this when the term is set
+                searchPattern(query.search!),
+              ),
+            ])
+          ),
+      ),
+    query,
+    FAVOURITES_FIRST,
+  );
+}
+
+/**
+ * Only a joined membership carries a role. Someone who has been invited as an
+ * administrator has not accepted yet, so they cannot administer the group.
+ */
+async function selectRoleForUser(
+  user: User,
+  writingGroupId: string,
+): Promise<UserInWritingGroupRole | undefined> {
+  const membership = await db
+    .selectFrom("userInWritingGroup")
+    .select("role")
+    .where("writingGroupId", "=", writingGroupId)
+    .where("userId", "=", user.id)
+    .where("status", "=", "joined")
+    .executeTakeFirst();
+
+  return membership?.role;
+}
+
+/** Returns nothing when the group does not exist. Authorisation is the caller's job. */
+async function updateWritingGroup(
+  writingGroupId: string,
+  changes: Partial<WritingGroupValues>,
+  changedBy: string,
+): Promise<WritingGroup | undefined> {
+  return await db.transaction().execute(async (transaction) => {
+    // Read first: only a change that actually moves the visibility is worth telling anybody
+    // about, and a request may well send the value it already has.
+    const before = await transaction
+      .selectFrom("writingGroup")
+      .select(["visibility", "genres", "subgenres"])
+      .where("id", "=", writingGroupId)
+      // Locked, as the idea's update locks its own row: a transaction alone is not enough at
+      // READ COMMITTED, so two edits — one moving the genres, the other the subgenres — could
+      // each read a state its own change agreed with and both commit the pair this refuses.
+      .forUpdate()
+      .executeTakeFirst();
+
+    if (before === undefined) {
+      return undefined;
+    }
+
+    // Against the row this update produces, not against the request: changing only the genres
+    // would otherwise leave whatever subgenres are already stored sitting under none of them.
+    refuseOrphanedSubgenres(
+      changes.genres ?? before.genres,
+      changes.subgenres ?? before.subgenres,
+    );
+
+    const updated = await transaction
+      .updateTable("writingGroup")
+      // Through `toRow` like the insert above, which it was not: an edit stored a padded title
+      // and a whitespace-only subtitle where founding a group trimmed both, and the group page
+      // then drew an empty row for a subtitle nobody wrote.
+      .set(toRow(changes))
+      .where("id", "=", writingGroupId)
+      .returning(["writingGroup.id"])
+      .executeTakeFirst();
+
+    if (updated === undefined) {
+      return undefined;
+    }
+
+    if (
+      changes.visibility !== undefined &&
+      changes.visibility !== before.visibility
+    ) {
+      await NotificationService.insertVisibilityChangeNotifications(
+        transaction,
+        {
+          writingGroupId,
+          actorId: changedBy,
+        },
+      );
+    }
+
+    // Re-read rather than RETURNING, which cannot reach the joined author name — nor the
+    // editor's own membership, which the response carries like every other group does.
+    return await transaction
+      .selectFrom("writingGroup")
+      .leftJoin("user", "user.id", "writingGroup.createdBy")
+      .leftJoin(
+        "userInWritingGroup",
+        (join) =>
+          join
+            .onRef("userInWritingGroup.writingGroupId", "=", "writingGroup.id")
+            .on("userInWritingGroup.userId", "=", changedBy),
+      )
+      .$call((builder) =>
+        withFavourite(builder, "writing_group", "writingGroup.id", changedBy)
+      )
+      .select([
+        ...SELECTED_COLUMNS,
+        AUTHOR_COLUMN,
+        ...OWN_MEMBERSHIP_COLUMNS,
+      ])
+      .where("writingGroup.id", "=", updated.id)
+      .executeTakeFirstOrThrow();
+  });
+}
+
+export const WritingGroupService = {
+  insertWritingGroup,
+  selectVisibleWritingGroup,
+  selectWritingGroupForReader,
+  listVisibleWritingGroups,
+  selectRoleForUser,
+  updateWritingGroup,
+};

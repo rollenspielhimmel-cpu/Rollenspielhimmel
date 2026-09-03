@@ -1,0 +1,176 @@
+/* The token values themselves, in the shadcn variable names theme.css maps to Tailwind
+   utilities. Light on :root, dark under .dark. Nothing here is referenced directly by a
+   component — they use the utilities. */
+
+:root {
+  --radius: 6px; /* --radius-control */
+
+  /* What the browser paints its own furniture with, read by `useTheme`. */
+  --chrome: #4f4132;
+
+  /* Calliope's own ramps, which theme.css exposes as utilities (bg-paper-1, text-ink-2, …).
+     They live here rather than in @theme so a `.dark` block can redefine them; stated as
+     literals there, every one of the ~400 uses was a fixed light colour. See issue #60. */
+  --paper-0: #fffdf9; /* raised: top bar, cards, composer */
+  --paper-1: #f7f4ee; /* the app canvas */
+  --paper-2: #f2ede3; /* rails, recessed below the canvas */
+  --paper-3: #eee5d3; /* quiet button fill, active rail row */
+  --paper-4: #e5d9c2; /* avatars, quiet hover */
+  --line-1: #f0e9dc;
+  --line-2: #e8e0d2;
+  --line-3: #e6dfd2; /* the default hairline */
+  --line-4: #ddd2bd;
+  --line-5: #cdbfa6; /* the strong border: quiet buttons, inputs */
+  --ink-1: #2b2620; /* headings */
+  --ink-2: #302a23; /* prose */
+  --ink-3: #4a4238;
+  --ink-4: #5c5346;
+  --ink-5: #6d6153; /* secondary interface text */
+  --ink-6: #7d7364;
+  --paper-edge: #efe9de;
+  --ink-label: #6f6455;
+  --oak: #8a6a3a; /* the one accent */
+  --oak-deep: #4f4132; /* solid actions */
+  --oak-deeper: #3f3427; /* solid hover */
+
+  /* A content card lifted off the canvas: two soft layers, warm rather than neutral, in the same
+     brown the drag and sheet shadows use — a grey or black shadow on warm paper reads as dirt
+     rather than as depth. Here rather than in @theme for the same reason the ramps are: `.dark`
+     redefines it, and a literal there would be a fixed light value at every use site. */
+  --elevation-card: 0 1px 3px rgba(90, 70, 40, 0.08), 0 1px 2px rgba(90, 70, 40, 0.05);
+
+  /* The one alert surface, and it exists only behind the role gate — see Alert surface in the
+     design system's readme. `--destructive` is a fill for acts that destroy writing; this is a
+     tint of the same hue for a state that needs answering, and it is never shown to a member. */
+  --surface-alert: #fbf0ed;
+  --line-alert: #e0b6ad;
+
+  --background: #f7f4ee; /* --paper-1, app canvas */
+  --foreground: #302a23; /* --ink-2, prose */
+  --card: #fffdf9; /* --paper-0, raised */
+  --card-foreground: #302a23;
+  --popover: #fffdf9;
+  --popover-foreground: #302a23;
+
+  --primary: #4f4132; /* --accent-deep, solid action */
+  --primary-foreground: #fffdf9;
+  --secondary: #eee5d3; /* --paper-3, quiet button fill */
+  --secondary-foreground: #4f4132;
+  --muted: #f2ede3; /* --paper-2, rails */
+  --muted-foreground: #6d6153; /* --ink-5 */
+  --accent: #eee5d3; /* hover/active surface, not a hue */
+  --accent-foreground: #4f4132;
+  --destructive: #8a3f37; /* --signal-error, use sparingly */
+  --avatar: #e5d9c2; /* --paper-4, --surface-avatar */
+  --avatar-foreground: #4f4132; /* --accent-deep */
+
+  --border: #e6dfd2; /* --line-3, hairlines */
+  --input: #ddd2bd; /* --line-4 */
+  --ring: #8a6a3a; /* --accent, focus ring + caret */
+
+  /* Calliope has no data-viz palette; these are ink/oak steps, not new hues. */
+  --chart-1: #8a6a3a;
+  --chart-2: #4f4132;
+  --chart-3: #7d7364;
+  --chart-4: #cdbfa6;
+  --chart-5: #e5d9c2;
+
+  --sidebar: #f2ede3; /* --surface-rail */
+  --sidebar-foreground: #4a4238; /* --ink-3 */
+  --sidebar-primary: #4f4132;
+  --sidebar-primary-foreground: #fffdf9;
+  --sidebar-accent: #eee5d3; /* active rail row */
+  --sidebar-accent-foreground: #4f4132;
+  --sidebar-border: #e6dfd2;
+  --sidebar-ring: #8a6a3a;
+}
+
+/* The dark appearance. #60
+
+   The ramp is authored rather than inverted: light recesses a surface by darkening it, and so
+   does this — raised is lighter than the canvas, rails darker — because on a dark ground a
+   surface that catches light reads as nearer, exactly as on paper. Mirroring the ramp would
+   have put the top bar below the canvas.
+
+   The ink and accent steps hold the contrast ratios the light design chose, within a few
+   percent, so emphasis reads the same on both grounds. Two deliberate departures: the
+   hairlines sit higher than their light ratios, because the same ratio at the dark end is a
+   far smaller absolute difference and a 1.21 hairline disappears; and `oak-deep` is *lighter*
+   than `oak` here, where light made it darker — it marks emphasis and hover, which means more
+   contrast on either ground. */
+.dark {
+  /* Surfaces, lightest raised */
+  --paper-0: #272119; /* raised: top bar, cards, composer */
+  --paper-1: #1e1a15; /* the app canvas */
+  --paper-2: #17130f; /* rails, recessed below the canvas */
+  --paper-3: #322b21; /* quiet button fill, active rail row */
+  --paper-4: #3e3628; /* avatars, quiet hover */
+
+  --line-1: #2a241c;
+  --line-2: #332c22;
+  --line-3: #3b3428; /* the default hairline */
+  --line-4: #4a4133;
+  --line-5: #5d5240; /* the strong border: quiet buttons, inputs */
+
+  --ink-1: #f3ece0; /* headings */
+  --ink-2: #e9e1d4; /* prose */
+  --ink-3: #d0c7b6;
+  --ink-4: #b6ac99;
+  --ink-5: #9c9280; /* secondary interface text */
+  --ink-6: #8a8069;
+
+  --paper-edge: #2b251d;
+  --ink-label: #9a907d;
+
+  --oak: #b0854a; /* the one accent */
+  --oak-deep: #ddb97e; /* emphasis and hover */
+  --oak-deeper: #ecd0a4;
+
+  /* Nearly black and stronger: the light theme's brown is invisible on a dark ground, and what
+     separates a card here is still mostly the raised paper under it. */
+  --elevation-card: 0 1px 3px rgba(0, 0, 0, 0.36), 0 1px 2px rgba(0, 0, 0, 0.24);
+
+  /* Authored rather than inverted, like the paper ramp above it: a lightened tint on a dark
+     ground reads as a smear, so the surface stays dark and the hue arrives in the hairline. */
+  --surface-alert: #33201d;
+  --line-alert: #7d443c;
+
+  --chrome: #272119;
+
+  /* Readable on an author's highlight, which was chosen against paper. */
+  --ink-on-highlight: #201c17;
+
+  --background: #1e1a15; /* --paper-1, app canvas */
+  --foreground: #e9e1d4; /* --ink-2, prose */
+  --card: #272119; /* --paper-0, raised */
+  --card-foreground: #e9e1d4;
+  --popover: #272119;
+  --popover-foreground: #e9e1d4;
+  --primary: #ddb97e; /* --oak-deep, solid action */
+  --primary-foreground: #1e1a15;
+  --secondary: #322b21; /* --paper-3, quiet button fill */
+  --secondary-foreground: #ddb97e;
+  --muted: #17130f; /* --paper-2, rails */
+  --muted-foreground: #9c9280; /* --ink-5 */
+  --accent: #322b21; /* hover/active surface, not a hue */
+  --accent-foreground: #ddb97e;
+  --destructive: #d98078; /* --signal-error, lifted to read on dark */
+  --avatar: #3e3628; /* --paper-4, --surface-avatar */
+  --avatar-foreground: #ddb97e; /* --oak-deep */
+  --border: #3b3428; /* --line-3, hairlines */
+  --input: #4a4133; /* --line-4 */
+  --ring: #b0854a; /* --oak, focus ring + caret */
+  --chart-1: #b0854a;
+  --chart-2: #ddb97e;
+  --chart-3: #8a8069;
+  --chart-4: #5d5240;
+  --chart-5: #3e3628;
+  --sidebar: #17130f; /* --surface-rail */
+  --sidebar-foreground: #d0c7b6; /* --ink-3 */
+  --sidebar-primary: #ddb97e;
+  --sidebar-primary-foreground: #1e1a15;
+  --sidebar-accent: #322b21; /* active rail row */
+  --sidebar-accent-foreground: #ddb97e;
+  --sidebar-border: #3b3428;
+  --sidebar-ring: #b0854a;
+}

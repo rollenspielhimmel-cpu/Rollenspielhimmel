@@ -1,0 +1,259 @@
+name: calliope
+
+# `docker compose logs` reads a file Docker writes, not the process, and json-file is unbounded
+# by default. 50 MB is about eighteen days of the backend, which produces the most by far.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    logging: *logging
+
+    # 443/udp carries HTTP/3. Port 80 is what Let's Encrypt redirects from and validates on.
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+
+    environment:
+      HOST_URL: ${HOST_URL:?set HOST_URL in .env}
+
+      # The gate in front of the whole site, and the team's own password for the mailbox. Caddy
+      # reads them out of its environment through the `{$VAR}` placeholders in the Caddyfile, so
+      # they have to be handed to *this* container — the backend's copy is no use here.
+      #
+      # **The hashes contain `$`**, which compose reads as the start of a variable. They are written
+      # `$$` in .env for that reason; compose turns each pair back into one. A hash that lost its
+      # dollars still looks like a hash and simply never matches, which is a bad way to spend an
+      # evening.
+      GATE_USERNAME: ${GATE_USERNAME:?set GATE_USERNAME in .env}
+      GATE_PASSWORD_HASH: ${GATE_PASSWORD_HASH:?set GATE_PASSWORD_HASH in .env}
+      MAILPIT_WEBROOT: ${MAILPIT_WEBROOT:-postfach}
+      MAILBOX_USERNAME: ${MAILBOX_USERNAME:?set MAILBOX_USERNAME in .env}
+      MAILBOX_PASSWORD_HASH: ${MAILBOX_PASSWORD_HASH:?set MAILBOX_PASSWORD_HASH in .env}
+
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./frontend/dist:/srv:ro
+      # Issued certificates live here; losing this volume means requesting them again.
+      - caddy-data:/data
+      - caddy-config:/config
+
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend-build:
+        condition: service_completed_successfully
+      # Caddy proxies the mailbox, so starting before it is ready serves a 502 to the one page
+      # somebody opens precisely because something is not arriving.
+      mailpit:
+        condition: service_healthy
+
+  # Built on the server, because the output is not committed. Runs to completion and exits.
+  frontend-build:
+    image: node:26-alpine
+    working_dir: /app
+    # The API client is generated rather than committed, so it has to be produced here or
+    # the type check fails on imports that do not exist yet in a fresh checkout.
+    command: sh -c "npm ci && npm run open-api:generate-client && npm run build"
+    environment:
+      # Baked into the bundle at build time, so the tab title and the wordmark are right from
+      # the first paint. Renaming means rebuilding, which a deploy does anyway.
+      VITE_APP_NAME: ${APP_NAME:-Calliope}
+      # No fallback, unlike the name above: the build refuses to produce a bundle that cannot
+      # say which instance it is for.
+      VITE_ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT must be set}
+      # Stamped by deploy.sh so it can check that the bundle Caddy serves is the one it built.
+      # Defaulted rather than required: a build by hand is not a deploy and has nothing to say.
+      VITE_COMMIT: ${GIT_COMMIT:-unknown}
+    volumes:
+      - ./frontend:/app
+      # orval reads the specification at ../backend/open-api.json, which is outside the
+      # mount above; this puts it where that relative path resolves to.
+      - ./backend/open-api.json:/backend/open-api.json:ro
+      # Keeps the container's dependencies out of the checkout.
+      - frontend-node-modules:/app/node_modules
+
+  backend:
+    build:
+      context: ./backend
+      # So the image creates the mount point with the runtime user's ownership; a volume Docker
+      # creates on its own belongs to root and refuses the first upload.
+      args:
+        FILE_STORAGE_PATH: ${FILE_STORAGE_PATH:?set FILE_STORAGE_PATH in .env}
+    restart: unless-stopped
+    logging: *logging
+
+    environment:
+      # The backend reads this at boot and refuses to start without it, which is the point:
+      # the seed guard and the notice the frontend shows must agree about which instance this is.
+      ENVIRONMENT: ${ENVIRONMENT:?ENVIRONMENT must be set}
+      HOST_URL: ${HOST_URL:?set HOST_URL in .env}
+      # Reported as releaseId by the health endpoint. Runtime rather than a build argument:
+      # the backend image compiles a binary, and a value that changes every deploy would
+      # rebuild it from scratch every deploy.
+      GIT_COMMIT: ${GIT_COMMIT:-}
+      APP_NAME: ${APP_NAME:-}
+      APP_DESCRIPTION: ${APP_DESCRIPTION:-}
+      APP_CONTACT_NAME: ${APP_CONTACT_NAME:-}
+      APP_CONTACT_EMAIL: ${APP_CONTACT_EMAIL:-}
+      # The one account that exists before anybody registers. Without it a fresh deployment
+      # comes up with no administrator at all and no way in but editing rows by hand — which is
+      # exactly what this deployment would have done.
+      #
+      # Read once, at the first start that finds no administrator: it never resets the password of
+      # an account that already exists, so editing this later changes nothing. Optional, because
+      # the OpenAPI generation runs with nothing but .example.env set.
+      ROOT_ADMIN_PASSWORD: ${ROOT_ADMIN_PASSWORD:-}
+      DATABASE_URL: postgres://calliope:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/calliope?sslmode=disable
+      REDIS_URL: redis://redis:6379
+
+      # The breach check's endpoint, stated rather than defaulted: reaching a third party
+      # is a decision a deployment makes.
+      PWNED_PASSWORDS_URL: ${PWNED_PASSWORDS_URL:?set PWNED_PASSWORDS_URL in .env}
+
+      SMTP_HOST: ${SMTP_HOST:?set SMTP_HOST in .env}
+      SMTP_PORT: ${SMTP_PORT:?set SMTP_PORT in .env}
+      SMTP_SECURE: ${SMTP_SECURE:?set SMTP_SECURE in .env}
+      # `?` rather than `:?`: the variable must be declared, but empty is a real answer — the
+      # mailer reads an empty username as "no credentials", which is what an SMTP server that
+      # wants none expects. A relay that wants them still fails loudly at the first send.
+      SMTP_USERNAME: ${SMTP_USERNAME?set SMTP_USERNAME in .env}
+      SMTP_PASSWORD: ${SMTP_PASSWORD?set SMTP_PASSWORD in .env}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:?set MAIL_FROM_ADDRESS in .env}
+      FILE_STORAGE_PATH: ${FILE_STORAGE_PATH:?set FILE_STORAGE_PATH in .env}
+
+    # Uploaded files. A volume rather than the image, so a deploy does not take them with it, and
+    # the one thing here `pg_dump` does not cover — the backup tars it, see deployment/backup.sh.
+    volumes:
+      - file-data:${FILE_STORAGE_PATH}
+
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+    # /api/health reports 503 when a database is unreachable, so the container restarts rather
+    # than serving errors. The binary asks itself: distroless has no shell for CMD-SHELL.
+    healthcheck:
+      test: ["CMD", "/usr/bin/deno", "run", "--cached-only", "--no-prompt", "--permission-set=calliope", "main.ts", "--health-check"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ── The interim mailbox ─────────────────────────────────────────────────────────────────
+  #
+  # **Nothing here reaches a real inbox.** Until an SMTP account exists, the backend sends into
+  # Mailpit and the mail stops there, where the team reads it and passes on what a tester needs —
+  # a confirmation link, a password reset.
+  #
+  # It is a stopgap and not one to launch on: a member who mistypes their address, or who asks
+  # for a reset at midnight, waits for a person. See "Outgoing mail" in deployment/README.md for
+  # what replaces it.
+  #
+  # No published ports. SMTP is reachable only inside this network, and the web side only through
+  # Caddy behind the team's own password — deliberately *not* the site password: this mailbox
+  # holds password-reset links for every account, so whoever reads it can take any of them over.
+  mailpit:
+    image: axllent/mailpit:v1.31.0
+    restart: unless-stopped
+    logging: *logging
+
+    environment:
+      # Served under a prefix: the domain has one name and the site is already on it.
+      MP_WEBROOT: ${MAILPIT_WEBROOT:-postfach}
+      # Kept on disk, so a restart does not throw away a link somebody is waiting for.
+      MP_DATABASE: /data/mailpit.db
+      MP_MAX_MESSAGES: 5000
+
+    volumes:
+      - mailpit-data:/data
+
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  migrate:
+    image: amacneil/dbmate:2.35.0
+    command: migrate
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    environment:
+      DATABASE_URL: postgres://calliope:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/calliope?sslmode=disable
+      DBMATE_MIGRATIONS_TABLE: migration.schema_migration
+      DBMATE_STRICT: "true"
+      DBMATE_NO_DUMP_SCHEMA: "true"
+
+    volumes:
+      - ./database/migrations:/db/migrations
+
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    logging: *logging
+
+    # 128 MB is the built-in default on an 8 GB host; cache hit rate beats every other knob.
+    command: postgres -c shared_buffers=1GB
+    # Docker gives a container 64 MB of /dev/shm, too little for parallel query workers.
+    shm_size: 1gb
+
+    environment:
+      POSTGRES_DB: calliope
+      POSTGRES_USER: calliope
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+
+    # postgres:18 keeps its data under /var/lib/postgresql/18/docker and declares
+    # /var/lib/postgresql as the volume, so the mount goes on the parent directory.
+    volumes:
+      - db-data:/var/lib/postgresql
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calliope -d calliope"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:8
+    restart: unless-stopped
+    logging: *logging
+
+    volumes:
+      - redis-data:/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 1s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  db-data:
+  file-data:
+  mailpit-data:
+  redis-data:
+  caddy-data:
+  caddy-config:
+  frontend-node-modules:
+
+# Declared only to carry IPv6. Without it an IPv6 client has no DNAT path to an IPv4-only
+# container, so `docker-proxy` bridges the connection and every request arrives from the bridge
+# gateway — which the rate limiter then treats as one member, and a session records instead of
+# the real address. Measured: over IPv4 the backend saw the true client, over IPv6 it saw
+# 172.18.0.1.
+networks:
+  default:
+    enable_ipv6: true

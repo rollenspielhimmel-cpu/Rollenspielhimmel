@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.app.json",
+
+  // Override to include only test files and clear exclusions.
+  // Application code imported in tests is automatically included via module resolution.
+  "include": ["src/**/__tests__/*", "env.d.ts"],
+  "exclude": [],
+
+  "compilerOptions": {
+    // `lib` is inherited, not cleared. Clearing it drops the ES built-ins as well as DOM, and
+    // the application code these tests import is the same code — `Array.at` stopped resolving
+    // the moment a spec reached a component. jsdom supplies the DOM at run time.
+    "types": ["node", "jsdom"],
+
+    // `vue-tsc --build` produces a .tsbuildinfo file for incremental type-checking.
+    // Specified here to keep it out of the root directory.
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.vitest.tsbuildinfo"
+  }
+}

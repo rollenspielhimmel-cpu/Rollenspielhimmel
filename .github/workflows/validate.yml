@@ -1,0 +1,152 @@
+name: Validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create .env from the example
+        run: cp .example.env .env
+        working-directory: .
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+          cache: true
+          cache-hash: ${{ hashFiles('backend/deno.lock') }}
+
+      - name: Install dependencies
+        run: deno install
+
+      - name: Check formatting, lints and types
+        run: deno task validate:check
+
+      - name: Check the OpenAPI specification is up to date
+        run: deno task open-api:check
+
+      # Disabled until Spectral supports OpenAPI 3.2. The specification declares 3.2.0 so
+      # that the list endpoints' `query` operations are legal, but Spectral only knows up to
+      # 3.1 and silently falls back to validating against the 3.0 schema, which then rejects
+      # both the version string and the 3.1-only `webhooks` key. The task itself is kept, so
+      # `deno task open-api:lint` still runs locally once that changes.
+      # - name: Lint the OpenAPI specification
+      #   run: deno task open-api:lint
+
+      # dbmate is a plain binary rather than a Deno dependency, so installing it lets the
+      # pipeline run the repository's own tasks instead of restating their configuration.
+      - name: Install dbmate
+        run: |
+          curl -fsSL -o /usr/local/bin/dbmate \
+            https://github.com/amacneil/dbmate/releases/latest/download/dbmate-linux-amd64
+          chmod +x /usr/local/bin/dbmate
+
+      # `--wait` blocks on the healthchecks in the compose file, so nothing races the
+      # databases becoming reachable.
+      - name: Start the databases and the mail catcher
+        run: docker compose up -d --wait
+        working-directory: .
+
+      - name: Apply migrations
+        run: deno task migrations:migrate
+        working-directory: database
+
+      - name: Run tests
+        run: deno task test
+
+  database:
+    name: Database
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: database
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create .env from the example
+        run: cp .example.env .env
+        working-directory: .
+
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+          cache: true
+          cache-hash: ${{ hashFiles('database/deno.lock') }}
+
+      - name: Install dependencies
+        run: deno install
+
+      - name: Check formatting, lints and types
+        run: deno task validate:check
+
+      # dbmate is a plain binary rather than a Deno dependency, so installing it lets the
+      # pipeline run the repository's own tasks instead of restating their configuration.
+      - name: Install dbmate
+        run: |
+          curl -fsSL -o /usr/local/bin/dbmate \
+            https://github.com/amacneil/dbmate/releases/latest/download/dbmate-linux-amd64
+          chmod +x /usr/local/bin/dbmate
+
+      - name: Start the database
+        run: docker compose up -d --wait db
+        working-directory: .
+
+      # The migrations are what these tests exercise, so they are applied here rather than
+      # assumed. Rolling all the way down and up again proves every `migrate:down` really
+      # reverses its `migrate:up` — a trigger function left behind breaks the next deploy.
+      - name: Apply migrations
+        run: deno task migrations:migrate
+
+      - name: Check the migrations roll back and forward again
+        run: |
+          # One rollback per migration file, so this neither stops short of the oldest one
+          # nor runs past it. A failure here is a `migrate:down` that does not reverse its
+          # `migrate:up`, and it has to fail the step rather than be swallowed.
+          for migration in migrations/*.sql; do deno task migrations:rollback; done
+          deno task migrations:migrate
+
+      - name: Run tests
+        run: deno task test
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The generated client is git-ignored, so a fresh checkout has none and the type check
+      # would fail on the missing imports. Generating from the committed spec also means a
+      # client that no longer matches it breaks the build here.
+      - name: Generate the API client
+        run: npm run open-api:generate-client
+
+      - name: Check formatting, lints and types
+        run: npm run validate:check
+
+      - name: Run tests
+        run: npm run test:unit -- --run
