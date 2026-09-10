@@ -162,7 +162,7 @@ services:
   # Caddy behind the team's own password — deliberately *not* the site password: this mailbox
   # holds password-reset links for every account, so whoever reads it can take any of them over.
   mailpit:
-    image: axllent/mailpit:v1.31.0
+    image: axllent/mailpit:v1.31.1
     restart: unless-stopped
     logging: *logging
 
@@ -182,7 +182,7 @@ services:
       timeout: 5s
       retries: 5
   migrate:
-    image: amacneil/dbmate:2.35.0
+    image: amacneil/dbmate:2.35.1
     command: migrate
 
     depends_on:
